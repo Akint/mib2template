@@ -58,6 +58,7 @@ my $opt = {
 };
  
 my @valuemaps;
+my %value_maps;
 my @mappings;
 my $vid;
 my $mid;
@@ -71,7 +72,7 @@ sub print_usage {
 Usage: $name <options>
 
 Options:
-\t-r|--root <OID>\t\t\tRoot OID to start template generation from. (mandatory)
+\t-r|--root <OID>\t\t\tRoot OID to start template generation from.
 \t-m|--module <MODULE>\t\tMIBs to load. Can be used multiple times, e.g.: -m MIB1 -m MIB2
 \t-g|--group <Hostgroup>\t\tZabbix host group this template will belong to. Can be used multiple times, e.g.: -g Templates -g HostGroup1
 \t-s|--source <filename>\t\tAdd generated template to already existing XML file.
@@ -110,9 +111,9 @@ sub get_options {
 	);
 	
 	print_usage() if $opt->{help};
-	print_usage(q(--root is mandatory)) if not defined $opt->{root};
+	#print_usage(q(--root is mandatory)) if not defined $opt->{root};
 	
-	$opt->{root} = qq(.$opt->{root}) if $opt->{root} !~ m/^\./;
+	$opt->{root} = qq(.$opt->{root}) if defined $opt->{root} and $opt->{root} !~ m/^\./;
 	
 	if (defined $opt->{source}){
 		my $parser = XML::LibXML->new;
@@ -139,10 +140,12 @@ sub hash2xml {
 sub create_xml {
 	$doc = XML::LibXML::Document->new('1.0','utf-8');
 	my %hash = (
-			version => q(2.0),
-			date => time2str('%Y-%m-%dT%H:%M:%S%z', time),
+			version => q(3.0),
+			#date => time2str('%Y-%m-%dT%H:%M:%S%z', time),
+			date => time2str('%Y-%m-%dT%H:%M:%SZ', time),
 			groups => qq(),
 			templates => qq(),
+			value_maps => qq(),
 	);
 	
 	my $zabbix_export = hash2xml(\%hash, q(zabbix_export));
@@ -244,6 +247,7 @@ sub generate_discovery {
 			applications => q(),
 			valuemap => q(),
 			logtimefmt => q(),
+			application_prototypes => q(),
 		);
 		$hash{units} = $child->{units} if defined $child->{units};
 		if (defined $value_types{$child->{type}}){
@@ -266,6 +270,7 @@ sub generate_discovery {
 			foreach my $key (sort {$child->{enums}->{$a} <=> $child->{enums}->{$b}} keys %{$child->{enums}}){
 				$mid++;
 				push @mappings, qq(INTO mappings (mappingid,valuemapid,value,newvalue) VALUES (mid+$mid,vid+$vid,'$child->{enums}->{$key}','$key'));
+				$value_maps{$child->{label}}{$key} = $child->{enums}->{$key};
 			}
 			${$item_prototype->findnodes(q(valuemap))}[0]->appendTextChild(qq(name),$child->{label});
 		}
@@ -345,6 +350,7 @@ sub generate_item {
 		foreach my $key (sort {$parent->{enums}->{$a} <=> $parent->{enums}->{$b}} keys %{$parent->{enums}}){
 			$mid++;
 			push @mappings, qq(INTO mappings (mappingid,valuemapid,VALUE,newvalue) VALUES (mid+$mid,vid+$vid,'$parent->{enums}->{$key}','$key'));
+			$value_maps{$parent->{label}}{$key} = $parent->{enums}->{$key};
 		}
 		${$item->findnodes(q(valuemap))}[0]->appendTextChild(q(name),$parent->{label});
 	}
@@ -409,25 +415,73 @@ sub generate_template {
 	return $template;
 }
 
+sub generate_value_map {
+	my ($name) = @_;
+	my %hash = (
+		name => $name,
+		mappings => q(),
+	);
+	my $value_map = hash2xml(\%hash, q(value_map));
+	foreach my $mapping (keys %{$value_maps{$name}}){
+		%hash = (
+			value => $value_maps{$name}{$mapping},
+			newvalue => $mapping,
+		);
+		${$value_map->findnodes(q(mappings))}[0]->appendChild(hash2xml(\%hash, q(mapping)));
+	}
+	return $value_map;
+}
+
+sub guess_root {
+	my ($module) = @_;
+	#print qq(Trying to guess root for module $module\n);
+	for my $oid (sort keys %SNMP::MIB){
+		next if $oid !~ m/.1\./;
+		return $oid if $SNMP::MIB{$oid}{moduleID} eq $module; 
+	}
+	return undef;
+}
+
 sub main {
 	get_options();
 	$SNMP::save_descriptions = 1;
 	SNMP::loadModules(@{$opt->{module}});
 	SNMP::initMib();
 
-	my $parent = $SNMP::MIB{$opt->{root}};
-	if ($parent->{objectID} ne $opt->{root}){
-		print_usage(qq(Parent OID $opt->{root} was not found! Maybe you forgot to load modules using --module=<module_name>?\n));
+	my @roots = ();
+
+	if (defined $opt->{root}){
+		push @roots, $opt->{root};
+	} else {
+		foreach my $module (@{$opt->{module}}){
+			my $oid = guess_root($module);
+			if (defined $oid){
+				push @roots, $oid;
+			} else {
+				next;
+			}
+		}
 	}
 
-	my $template = generate_template($parent);
-	${$doc->findnodes(q(/zabbix_export/templates))}[0]->appendChild($template);
+	foreach my $root (@roots){
+		my $parent = $SNMP::MIB{$root};
+		if ($parent->{objectID} ne $root){
+			print_usage(qq(Parent OID $opt->{root} was not found! Maybe you forgot to load modules using --module=<module_name>?\n));
+		}
+	
+		my $template = generate_template($parent);
+		${$doc->findnodes(q(/zabbix_export/templates))}[0]->appendChild($template);
+	}
 
 	foreach my $group (@{$opt->{group}}){
 		my %hash = (
 			name => $group,
 		);
 		${$doc->findnodes(q(zabbix_export/groups))}[0]->appendChild(hash2xml(\%hash, q(group)));
+	}
+
+	foreach my $value_map (keys %value_maps){
+		${$doc->findnodes(q(zabbix_export/value_maps))}[0]->appendChild(generate_value_map($value_map));
 	}
 
 	my $out = $doc->toString(2);
@@ -441,25 +495,6 @@ sub main {
 		binmode STDOUT, q(:encoding(UTF-8));
 		print $out;
 	}
-	
-	print STDERR qq(
-DECLARE
-	vid PLS_INTEGER;
-	mid PLS_INTEGER;
-BEGIN
-	SELECT MAX(valuemapid) into vid FROM valuemaps;
-	SELECT MAX(mappingid) into mid FROM mappings;
-	INSERT ALL
-	).join(qq(\n\t\t), @valuemaps).qq(
-	SELECT * FROM dual;
-	INSERT ALL
-	).join(qq(\n\t\t), @mappings).qq(
-	SELECT * FROM dual;
-	UPDATE ids SET nextid=vid+$vid+1 WHERE table_name='valuemaps' AND field_name='valuemapid';
-	UPDATE ids SET nextid=mid+$mid+1 WHERE table_name='mappings' AND field_name='mappingid';
-	COMMIT;
-END;
-/\n) if defined $opt->{valuemaps} and defined $vid;
 }
 
 main();
