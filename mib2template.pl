@@ -10,6 +10,7 @@ use File::Basename;
 use Log::Log4perl qw(get_logger);
 use Log::Log4perl::Level;
 use utf8;
+use Capture::Tiny qw(:all);
 
 # from Zabbix sources
 #define('ITEM_TYPE_SNMPV1',				 1);
@@ -467,7 +468,14 @@ sub main {
 	get_options();
 	$SNMP::save_descriptions = 1;
 	$SNMP::verbose = 0;
-	SNMP::loadModules(@{$opt->{module}});
+	my ($stdout, $stderr, $exit) = capture { 
+		SNMP::loadModules(@{$opt->{module}});
+	};
+	if (defined $stderr && $stderr ne q()){
+		$logger->fatal($stderr);
+		exit 1;
+	}
+
 	SNMP::initMib();
 
 	my @roots = ();
