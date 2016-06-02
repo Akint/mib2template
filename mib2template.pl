@@ -58,36 +58,19 @@ my $opt = {
 	discovery	=> 3600,
 };
 
-my $logger_config = q(
-	log4perl.logger = WARN, STDERR
-	log4perl.appender.STDERR = Log::Log4perl::Appender::Screen
-	log4perl.appender.STDERR.stderr = 1
-	log4perl.appender.STDERR.utf8 = 1
-	log4perl.appender.STDERR.layout = Log::Log4perl::Layout::PatternLayout::Multiline
-	log4perl.appender.STDERR.layout.ConversionPattern = sub { qq(%d{yyyy-MM-dd HH:mm:ss} %p> %m%n) }
-);
- 
-my %value_maps;
-my $vid;
-my $mid;
-my $doc;
-my @applications;
-my $logger;
+my $logger_config = <<'END_LOGGER'
+log4perl.logger = WARN, STDERR
+log4perl.appender.STDERR = Log::Log4perl::Appender::Screen
+log4perl.appender.STDERR.stderr = 1
+log4perl.appender.STDERR.utf8 = 1
+log4perl.appender.STDERR.layout = Log::Log4perl::Layout::PatternLayout::Multiline
+log4perl.appender.STDERR.layout.ConversionPattern = sub { qq(%d{yyyy-MM-dd HH:mm:ss} %p> %m%n) }
+END_LOGGER
+;
 
-$SIG{__WARN__} = sub {
-	my ($message) = @_;
-	local $Log::Log4perl::caller_depth = $Log::Log4perl::caller_depth + 1;
-	$logger->warn($message);
-};
-
-sub print_usage {
-	my ($message) = @_;
-	my $name = basename($0);
-	my $usage = <<EOF
-
-Usage: $name <options>
-
-Options:
+my $usage = <<"END_USAGE"
+\nUsage: $0 <options>\n
+Options:\n
 \t-m|--module <MODULE>\t\tMIBs to load. Can be used multiple times, e.g.: -m IF-MIB -m SW-MIB (mandatory)
 \t-r|--root <OID>\t\t\tRoot OID to start template generation from.
 \t-g|--group <Hostgroup>\t\tZabbix host group this template will belong to. Can be used multiple times, e.g.: -g Templates -g HostGroup1
@@ -99,10 +82,19 @@ Options:
 \t-h|--help\t\t\tPrint this help and exit.
 \t-v|--verbose\t\t\tIncrease verbosity level.
 \t-d|--debug\t\t\tEnable debug messaging.
-EOF
+END_USAGE
 ;
-	print $usage;
-}
+ 
+my %value_maps;
+my $doc;
+my @applications;
+my $logger;
+
+local $SIG{__WARN__} = sub {
+	my ($message) = @_;
+	local $Log::Log4perl::caller_depth = $Log::Log4perl::caller_depth + 1;
+	$logger->warn($message);
+};
 
 sub get_options {
 	GetOptions($opt,
@@ -120,7 +112,7 @@ sub get_options {
 	);
 	
 	if ($opt->{help}){
-		print_usage();
+		print $usage;
 		exit 0;
 	}
 
@@ -133,13 +125,14 @@ sub get_options {
 
 	if (@{$opt->{module}} == 0){
 		$logger->error(q(--module is mandatory));
-		print_usage();
+		print $usage;
 		exit 1;
 	}
 	
 	$opt->{root} = qq(.$opt->{root}) if defined $opt->{root} and $opt->{root} !~ m/^\./;
 	
 	@{$opt->{group}} = qw(Templates) if not @{$opt->{group}};
+	return;
 }
 
 sub hash2xml {
@@ -153,19 +146,20 @@ sub hash2xml {
 	return $parent;
 }
 
-sub create_xml {
+sub create_empty_xml {
 	$logger->debug(q(Creating emtpy XML));
-	$doc = XML::LibXML::Document->new('1.0','utf-8');
+	$doc = XML::LibXML::Document->new(q(1.0), q(utf-8));
 	my %hash = (
 			version => q(3.0),
-			date => time2str('%Y-%m-%dT%H:%M:%SZ', time),
-			groups => qq(),
-			templates => qq(),
-			value_maps => qq(),
+			date => time2str(q(%Y-%m-%dT%H:%M:%SZ), time),
+			groups => q(),
+			templates => q(),
+			value_maps => q(),
 	);
 	
 	my $zabbix_export = hash2xml(\%hash, q(zabbix_export));
 	$doc->addChild($zabbix_export);
+	return;
 }
 
 sub generate_discovery {
@@ -281,10 +275,8 @@ sub generate_discovery {
 		${$discovery_rule->getElementsByTagName(q(item_prototypes))}[0]->appendChild($item_prototype);
 	
 		if (defined $opt->{valuemaps} and keys %{$child->{enums}}){
-			$vid++;
 			$logger->debug(qq(Generating value mapping $child->{label}));
 			foreach my $key (sort {$child->{enums}->{$a} <=> $child->{enums}->{$b}} keys %{$child->{enums}}){
-				$mid++;
 				$value_maps{$child->{label}}{$key} = $child->{enums}->{$key};
 			}
 			${$item_prototype->findnodes(q(valuemap))}[0]->appendTextChild(qq(name),$child->{label});
@@ -360,9 +352,7 @@ sub generate_item {
 	${$item->findnodes(q(applications))}[0]->appendChild(hash2xml(\%hash, q(application)));
 
 	if (defined $opt->{valuemaps} and keys %{$parent->{enums}}){
-		$vid++;
 		foreach my $key (sort {$parent->{enums}->{$a} <=> $parent->{enums}->{$b}} keys %{$parent->{enums}}){
-			$mid++;
 			$value_maps{$parent->{label}}{$key} = $parent->{enums}->{$key};
 		}
 		${$item->findnodes(q(valuemap))}[0]->appendTextChild(q(name),$parent->{label});
@@ -453,13 +443,15 @@ sub guess_root {
 		next if $oid !~ m/.1\./;
 		return $oid if $SNMP::MIB{$oid}{moduleID} eq $module and @{$SNMP::MIB{$oid}{children}} > 0; 
 	}
-	return undef;
+	return;
 }
 
 sub main {
 	Log::Log4perl->init(\$logger_config);
 	$logger = get_logger();
+
 	get_options();
+
 	$SNMP::save_descriptions = 1;
 	$SNMP::verbose = 0;
 	my ($stdout, $stderr, $exit) = capture { 
@@ -469,11 +461,9 @@ sub main {
 		$logger->fatal($stderr);
 		exit 1;
 	}
-
 	SNMP::initMib();
 
 	my @roots = ();
-
 	if (defined $opt->{root}){
 		$logger->debug(qq(Root OID is defined, using it: $opt->{root}));
 		push @roots, $opt->{root};
@@ -491,7 +481,7 @@ sub main {
 		}
 	}
 
-	create_xml();
+	create_empty_xml();
 
 	foreach my $root (@roots){
 		my $parent = $SNMP::MIB{$root};
@@ -511,8 +501,11 @@ sub main {
 		${$doc->findnodes(q(zabbix_export/groups))}[0]->appendChild(hash2xml(\%hash, q(group)));
 	}
 
-	foreach my $value_map (keys %value_maps){
-		${$doc->findnodes(q(zabbix_export/value_maps))}[0]->appendChild(generate_value_map($value_map));
+	if (keys %value_maps){
+		$logger->info(q(Value maps are used. You will have to import template as Zabbix Super Admin.));
+		foreach my $value_map (keys %value_maps){
+			${$doc->findnodes(q(zabbix_export/value_maps))}[0]->appendChild(generate_value_map($value_map));
+		}
 	}
 
 	my $out = $doc->toString(2);
@@ -520,6 +513,8 @@ sub main {
 	
 	binmode STDOUT, q(:encoding(UTF-8));
 	print $out;
+	
+	return 1;
 }
 
 main();
