@@ -102,7 +102,7 @@ sub get_options {
 		q(group|g=s@),
 		q(valuemaps!),
 		q(help|h!),
-		q(root=s),
+		q(root|r=s),
 		q(interval=i),
 		q(history=i),
 		q(trends=i),
@@ -363,7 +363,7 @@ sub generate_item {
 
 sub generate_template {
 	my ($parent) = @_;
-	my $name = q(Template MIB ).join(q( ),@{$opt->{module}}).qq( - $parent->{label});
+	my $name = qq(Template MIB $parent->{module} - $parent->{label});
 	$logger->debug(qq(Generating template "$name" starting from OID $parent->{objectID}));
 	my %hash = (
 		template => $name,
@@ -486,8 +486,11 @@ sub main {
 	foreach my $root (@roots){
 		my $parent = $SNMP::MIB{$root};
 		if ($parent->{objectID} ne $root){
-			$logger->error(qq(Parent OID $opt->{root} was not found! Maybe you forgot to load modules using --module=<module_name>?));
+			$logger->fatal(qq(Parent OID $opt->{root} was not found! Maybe you forgot to load modules using --module=<module_name>?));
 			exit 1;
+		}
+		if (! grep { $_ eq $parent->{module} } @{$opt->{module}}){
+			$logger->warn(qq(Parent OID $opt->{root} belongs to $parent->{module}, which isn't among the ones specified with --module option));
 		}
 	
 		my $template = generate_template($parent);
