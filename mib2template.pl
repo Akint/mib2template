@@ -1,10 +1,10 @@
 #!/usr/bin/perl 
 use strict;
 use warnings;
-use SNMP; # must be 5.0.5 or newer
+use SNMP 5.0.5;
 use XML::LibXML;
 use Data::Dumper;
-use Getopt::Long qw(GetOptions);
+use Getopt::Long qw(GetOptions :config posix_default bundling no_ignore_case);
 use Date::Format;
 use File::Basename;
 use Log::Log4perl qw(get_logger);
@@ -46,10 +46,8 @@ my %value_types = (
 );
 
 my $opt = {
-	source		=> undef,
 	module		=> [],
 	group		=> [],
-	inplace		=> undef,
 	valuemaps	=> undef,
 	root		=> undef,
 	help		=> undef,
@@ -91,11 +89,9 @@ sub print_usage {
 Usage: $name <options>
 
 Options:
+\t-m|--module <MODULE>\t\tMIBs to load. Can be used multiple times, e.g.: -m IF-MIB -m SW-MIB (mandatory)
 \t-r|--root <OID>\t\t\tRoot OID to start template generation from.
-\t-m|--module <MODULE>\t\tMIBs to load. Can be used multiple times, e.g.: -m MIB1 -m MIB2 (mandatory)
 \t-g|--group <Hostgroup>\t\tZabbix host group this template will belong to. Can be used multiple times, e.g.: -g Templates -g HostGroup1
-\t-s|--source <filename>\t\tAdd generated template to already existing XML file.
-\t-i|--inplace\t\t\tIf source file is defined, it will be edited inplace. The output will be send to stdout otherwise.
 \t--valuemaps\t\t\tUse Value Mappings. You will have to import template as Zabbix Super Admin.
 \t--interval\t\t\tData collection interval in seconds. Default is 300.
 \t--history\t\t\tHistory storage period (in days). Default is 7.
@@ -111,10 +107,8 @@ EOF
 
 sub get_options {
 	GetOptions($opt,
-		q(source=s),
-		q(module=s@),
-		q(group=s@),
-		q(inplace!),
+		q(module|m=s@),
+		q(group|g=s@),
 		q(valuemaps!),
 		q(help|h!),
 		q(root=s),
@@ -123,7 +117,7 @@ sub get_options {
 		q(trends=i),
 		q(discovery=i),
 		q(verbose|v+),
-		q(debug),
+		q(debug|d),
 	);
 	
 	if ($opt->{help}){
@@ -146,15 +140,7 @@ sub get_options {
 	
 	$opt->{root} = qq(.$opt->{root}) if defined $opt->{root} and $opt->{root} !~ m/^\./;
 	
-	if (defined $opt->{source}){
-		my $parser = XML::LibXML->new;
-		$doc = $parser->parse_file($opt->{source}) or $logger->logdie(qq(can't parse XML file: $@));
-	} else {
-		create_xml();
-	}
-
 	@{$opt->{group}} = qw(Templates) if not @{$opt->{group}};
-	my $root = $doc->documentElement();
 }
 
 sub hash2xml {
@@ -481,8 +467,7 @@ sub main {
 	get_options();
 	$SNMP::save_descriptions = 1;
 	$SNMP::verbose = 0;
-	my $res = SNMP::loadModules(@{$opt->{module}});
-	$logger->fatal(qq(QQ $res QQ));
+	SNMP::loadModules(@{$opt->{module}});
 	SNMP::initMib();
 
 	my @roots = ();
@@ -503,6 +488,8 @@ sub main {
 			}
 		}
 	}
+
+	create_xml();
 
 	foreach my $root (@roots){
 		my $parent = $SNMP::MIB{$root};
@@ -529,14 +516,8 @@ sub main {
 	my $out = $doc->toString(2);
 	utf8::decode($out);
 	
-	if (defined $opt->{source} and defined $opt->{inplace}){
-		open my $fh, q(>), $opt->{source} or die qq(Cannot open $opt->{source} file for write: $!);
-		print $fh $doc->toString;
-		close $fh;
-	} else {
-		binmode STDOUT, q(:encoding(UTF-8));
-		print $out;
-	}
+	binmode STDOUT, q(:encoding(UTF-8));
+	print $out;
 }
 
 main();
