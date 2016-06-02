@@ -67,9 +67,7 @@ my $logger_config = q(
 	log4perl.appender.STDERR.layout.ConversionPattern = sub { qq(%d{yyyy-MM-dd HH:mm:ss} %p> %m%n) }
 );
  
-my @valuemaps;
 my %value_maps;
-my @mappings;
 my $vid;
 my $mid;
 my $doc;
@@ -285,10 +283,8 @@ sub generate_discovery {
 		if (defined $opt->{valuemaps} and keys %{$child->{enums}}){
 			$vid++;
 			$logger->debug(qq(Generating value mapping $child->{label}));
-			push @valuemaps, qq(INTO valuemaps (valuemapid,name) VALUES (vid+$vid,'$child->{label}'));
 			foreach my $key (sort {$child->{enums}->{$a} <=> $child->{enums}->{$b}} keys %{$child->{enums}}){
 				$mid++;
-				push @mappings, qq(INTO mappings (mappingid,valuemapid,value,newvalue) VALUES (mid+$mid,vid+$vid,'$child->{enums}->{$key}','$key'));
 				$value_maps{$child->{label}}{$key} = $child->{enums}->{$key};
 			}
 			${$item_prototype->findnodes(q(valuemap))}[0]->appendTextChild(qq(name),$child->{label});
@@ -365,10 +361,8 @@ sub generate_item {
 
 	if (defined $opt->{valuemaps} and keys %{$parent->{enums}}){
 		$vid++;
-		push @valuemaps, qq(INTO valuemaps (valuemapid,name) VALUES (vid+$vid,'$parent->{label}'));
 		foreach my $key (sort {$parent->{enums}->{$a} <=> $parent->{enums}->{$b}} keys %{$parent->{enums}}){
 			$mid++;
-			push @mappings, qq(INTO mappings (mappingid,valuemapid,VALUE,newvalue) VALUES (mid+$mid,vid+$vid,'$parent->{enums}->{$key}','$key'));
 			$value_maps{$parent->{label}}{$key} = $parent->{enums}->{$key};
 		}
 		${$item->findnodes(q(valuemap))}[0]->appendTextChild(q(name),$parent->{label});
