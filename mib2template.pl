@@ -13,49 +13,49 @@ use utf8;
 use Capture::Tiny qw(:all);
 
 # from Zabbix sources
-#define('ITEM_TYPE_SNMPV1',				 1);
-#define('ITEM_TYPE_SNMPV2C',			 4);
-#define('ITEM_TYPE_SNMPV3',				 6);
+#define('ITEM_TYPE_SNMPV1',           1);
+#define('ITEM_TYPE_SNMPV2C',          4);
+#define('ITEM_TYPE_SNMPV3',           6);
 #
-#define('ITEM_VALUE_TYPE_FLOAT',		 0);
-#define('ITEM_VALUE_TYPE_STR',			 1); // aka Character
-#define('ITEM_VALUE_TYPE_LOG',			 2);
-#define('ITEM_VALUE_TYPE_UINT64',		 3);
-#define('ITEM_VALUE_TYPE_TEXT',			 4);
+#define('ITEM_VALUE_TYPE_FLOAT',      0);
+#define('ITEM_VALUE_TYPE_STR',        1); // aka Character
+#define('ITEM_VALUE_TYPE_LOG',        2);
+#define('ITEM_VALUE_TYPE_UINT64',     3);
+#define('ITEM_VALUE_TYPE_TEXT',       4);
 #
-#define('ITEM_DATA_TYPE_DECIMAL',		 0);
-#define('ITEM_DATA_TYPE_OCTAL',			 1);
-#define('ITEM_DATA_TYPE_HEXADECIMAL',	 2);
-#define('ITEM_DATA_TYPE_BOOLEAN',		 3);
+#define('ITEM_DATA_TYPE_DECIMAL',     0);
+#define('ITEM_DATA_TYPE_OCTAL',       1);
+#define('ITEM_DATA_TYPE_HEXADECIMAL', 2);
+#define('ITEM_DATA_TYPE_BOOLEAN',     3);
 
 # assuming, that integers/counters/gauges go to Zabbix integers
 # the rest goes to character type and should be reviewed at frontend (probably, changed or deleted)
 my %value_types = (
-	BITS		 => 1,
-	COUNTER		 => 3,
-	COUNTER64	 => 3,
-	GAUGE		 => 3,
-	INTEGER		 => 3,
-	INTEGER32	 => 3,
-	IPADDR		 => 1,
-	NETADDR		 => 1,
-	OBJECTID	 => 1,
-	OCTETSTR	 => 1,
-	OPAQUE		 => 1,
-	TICKS		 => 3,
-	UNSIGNED32	 => 3,
+        BITS             => 1,
+        COUNTER          => 3,
+        COUNTER64        => 3,
+        GAUGE            => 3,
+        INTEGER          => 3,
+        INTEGER32        => 3,
+        IPADDR           => 1,
+        NETADDR          => 1,
+        OBJECTID         => 1,
+        OCTETSTR         => 1,
+        OPAQUE           => 1,
+        TICKS            => 3,
+        UNSIGNED32       => 3,
 );
 
 my $opt = {
-	module		=> [],
-	group		=> [],
-	valuemaps	=> undef,
-	root		=> undef,
-	help		=> undef,
-	interval	=> 300,
-	history		=> 7,
-	trends		=> 365,
-	discovery	=> 3600,
+        module          => [],
+        group           => [],
+        valuemaps       => undef,
+        root            => undef,
+        help            => undef,
+        interval        => 300,
+        history         => 7,
+        trends          => 365,
+        discovery       => 3600,
 };
 
 my $logger_config = <<'END_LOGGER'
