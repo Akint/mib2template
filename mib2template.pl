@@ -7,23 +7,25 @@ use Data::Dumper;
 use Getopt::Long qw(GetOptions);
 use Date::Format;
 use File::Basename;
+use Log::Log4perl qw(get_logger);
+use Log::Log4perl::Level;
 use utf8;
 
 # from Zabbix sources
-#define('ITEM_TYPE_SNMPV1',              1);
-#define('ITEM_TYPE_SNMPV2C',             4);
-#define('ITEM_TYPE_SNMPV3',              6);
+#define('ITEM_TYPE_SNMPV1',				 1);
+#define('ITEM_TYPE_SNMPV2C',			 4);
+#define('ITEM_TYPE_SNMPV3',				 6);
 #
-#define('ITEM_VALUE_TYPE_FLOAT',         0);
-#define('ITEM_VALUE_TYPE_STR',           1); // aka Character
-#define('ITEM_VALUE_TYPE_LOG',           2);
-#define('ITEM_VALUE_TYPE_UINT64',        3);
-#define('ITEM_VALUE_TYPE_TEXT',          4);
+#define('ITEM_VALUE_TYPE_FLOAT',		 0);
+#define('ITEM_VALUE_TYPE_STR',			 1); // aka Character
+#define('ITEM_VALUE_TYPE_LOG',			 2);
+#define('ITEM_VALUE_TYPE_UINT64',		 3);
+#define('ITEM_VALUE_TYPE_TEXT',			 4);
 #
-#define('ITEM_DATA_TYPE_DECIMAL',        0);
-#define('ITEM_DATA_TYPE_OCTAL',          1);
-#define('ITEM_DATA_TYPE_HEXADECIMAL',    2);
-#define('ITEM_DATA_TYPE_BOOLEAN',        3);
+#define('ITEM_DATA_TYPE_DECIMAL',		 0);
+#define('ITEM_DATA_TYPE_OCTAL',			 1);
+#define('ITEM_DATA_TYPE_HEXADECIMAL',	 2);
+#define('ITEM_DATA_TYPE_BOOLEAN',		 3);
 
 # assuming, that integers/counters/gauges go to Zabbix integers
 # the rest goes to character type and should be reviewed at frontend (probably, changed or deleted)
@@ -56,6 +58,15 @@ my $opt = {
 	trends		=> 365,
 	discovery	=> 3600,
 };
+
+my $logger_config = q(
+	log4perl.logger = WARN, STDERR
+	log4perl.appender.STDERR = Log::Log4perl::Appender::Screen
+	log4perl.appender.STDERR.stderr = 1
+	log4perl.appender.STDERR.utf8 = 1
+	log4perl.appender.STDERR.layout = Log::Log4perl::Layout::PatternLayout::Multiline
+	log4perl.appender.STDERR.layout.ConversionPattern = sub { qq(%d{yyyy-MM-dd HH:mm:ss} %p> %m%n) }
+);
  
 my @valuemaps;
 my %value_maps;
@@ -64,35 +75,38 @@ my $vid;
 my $mid;
 my $doc;
 my @applications;
+my $logger;
+
+$SIG{__WARN__} = sub {
+	my ($message) = @_;
+	local $Log::Log4perl::caller_depth = $Log::Log4perl::caller_depth + 1;
+	$logger->warn($message);
+};
 
 sub print_usage {
 	my ($message) = @_;
 	my $name = basename($0);
 	my $usage = <<EOF
+
 Usage: $name <options>
 
 Options:
 \t-r|--root <OID>\t\t\tRoot OID to start template generation from.
-\t-m|--module <MODULE>\t\tMIBs to load. Can be used multiple times, e.g.: -m MIB1 -m MIB2
+\t-m|--module <MODULE>\t\tMIBs to load. Can be used multiple times, e.g.: -m MIB1 -m MIB2 (mandatory)
 \t-g|--group <Hostgroup>\t\tZabbix host group this template will belong to. Can be used multiple times, e.g.: -g Templates -g HostGroup1
 \t-s|--source <filename>\t\tAdd generated template to already existing XML file.
 \t-i|--inplace\t\t\tIf source file is defined, it will be edited inplace. The output will be send to stdout otherwise.
-\t-v|--valuemaps\t\t\tUse Value Mappings. Will print SQL query for Value Mapping insertion. Should be done via Zabbix API, when it's implemented.
+\t--valuemaps\t\t\tUse Value Mappings. You will have to import template as Zabbix Super Admin.
 \t--interval\t\t\tData collection interval in seconds. Default is 300.
 \t--history\t\t\tHistory storage period (in days). Default is 7.
 \t--trends\t\t\tTrend storage period (in days). Default is 365.
 \t--discovery\t\t\tDiscovery delay (in seconds). Default is 3600.
 \t-h|--help\t\t\tPrint this help and exit.
+\t-v|--verbose\t\t\tIncrease verbosity level.
+\t-d|--debug\t\t\tEnable debug messaging.
 EOF
 ;
-	if ($message) {
-		print (STDERR qq(\033[31;1m$message\033[0m\n\n));
-		print (STDERR $usage);
-		exit 1;
-	} else {
-		print $usage;
-		exit 0;
-	}
+	print $usage;
 }
 
 sub get_options {
@@ -108,16 +122,33 @@ sub get_options {
 		q(history=i),
 		q(trends=i),
 		q(discovery=i),
+		q(verbose|v+),
+		q(debug),
 	);
 	
-	print_usage() if $opt->{help};
-	#print_usage(q(--root is mandatory)) if not defined $opt->{root};
+	if ($opt->{help}){
+		print_usage();
+		exit 0;
+	}
+
+	if (defined $opt->{debug} && $opt->{debug} == 1){
+		$logger->level($DEBUG);
+	}
+	if (defined $opt->{verbose} && $opt->{verbose}){
+		$logger->more_logging($opt->{verbose});
+	}
+
+	if (@{$opt->{module}} == 0){
+		$logger->error(q(--module is mandatory));
+		print_usage();
+		exit 1;
+	}
 	
 	$opt->{root} = qq(.$opt->{root}) if defined $opt->{root} and $opt->{root} !~ m/^\./;
 	
 	if (defined $opt->{source}){
 		my $parser = XML::LibXML->new;
-		$doc = $parser->parse_file($opt->{source}) or die qq(can't parse XML file: $@);
+		$doc = $parser->parse_file($opt->{source}) or $logger->logdie(qq(can't parse XML file: $@));
 	} else {
 		create_xml();
 	}
@@ -138,10 +169,10 @@ sub hash2xml {
 }
 
 sub create_xml {
+	$logger->debug(q(Creating emtpy XML));
 	$doc = XML::LibXML::Document->new('1.0','utf-8');
 	my %hash = (
 			version => q(3.0),
-			#date => time2str('%Y-%m-%dT%H:%M:%S%z', time),
 			date => time2str('%Y-%m-%dT%H:%M:%SZ', time),
 			groups => qq(),
 			templates => qq(),
@@ -156,6 +187,7 @@ sub generate_discovery {
 	my ($parent) = @_;
 	(my $description = $parent->{description}) =~ s/^\s*//gm;
 	$description = substr($description, 0, 2048);
+	$logger->debug(qq(Generating discovery rule $parent->{label}));
 	my %hash = (
 		name => $parent->{label},
 		type => 4,
@@ -182,7 +214,6 @@ sub generate_discovery {
 		privatekey => q(),
 		port => q(),
 		lifetime => 1,
-		#description => substr($parent->{description},0,2048),
 		description => $description,
 		item_prototypes => q(),
 		trigger_prototypes => q(),
@@ -206,6 +237,7 @@ sub generate_discovery {
 		my $name = $child->{description} !~ m/^\s*$/m ? $child->{description} : $child->{label};
 		$name = (split /\n/, $name )[0];
 		$name =~ s/\.\s*$//;
+		$logger->debug(qq(Generating item prototype $child->{label} ("$name")));
 		($description = $child->{description}) =~ s/^\s*//gm;
 		$description = substr($description, 0, 2048);
 		%hash = (
@@ -241,7 +273,6 @@ sub generate_discovery {
 			publickey => q(),
 			privatekey => q(),
 			port => q(),
-			#description => substr($child->{description},0,2048),
 			description => $description,
 			inventory_link => 0,
 			applications => q(),
@@ -266,6 +297,7 @@ sub generate_discovery {
 	
 		if (defined $opt->{valuemaps} and keys %{$child->{enums}}){
 			$vid++;
+			$logger->debug(qq(Generating value mapping $child->{label}));
 			push @valuemaps, qq(INTO valuemaps (valuemapid,name) VALUES (vid+$vid,'$child->{label}'));
 			foreach my $key (sort {$child->{enums}->{$a} <=> $child->{enums}->{$b}} keys %{$child->{enums}}){
 				$mid++;
@@ -286,6 +318,7 @@ sub generate_item {
 	my $name = $parent->{description} !~ m/^\s*$/m ? $parent->{description} : $parent->{label};
 	$name = (split /\n/, $name )[0];
 	$name =~ s/\.\s*$//;
+	$logger->debug(qq(Generating item $parent->{label} ("$name")));
 	(my $description = $parent->{description}) =~ s/^\s*//gm;
 	$description = substr($description, 0, 2048);
 
@@ -322,7 +355,6 @@ sub generate_item {
 		publickey => q(),
 		privatekey => q(),
 		port => q(),
-		#description => substr($parent->{description},0,2048),
 		description => $description,
 		inventory_link => 0,
 		applications => q(),
@@ -361,6 +393,7 @@ sub generate_item {
 sub generate_template {
 	my ($parent) = @_;
 	my $name = q(Template MIB ).join(q( ),@{$opt->{module}}).qq( - $parent->{label});
+	$logger->debug(qq(Generating template "$name" starting from OID $parent->{objectID}));
 	my %hash = (
 		template => $name,
 		name => $name,
@@ -434,30 +467,38 @@ sub generate_value_map {
 
 sub guess_root {
 	my ($module) = @_;
-	#print qq(Trying to guess root for module $module\n);
+	$logger->debug(qq(Trying to guess root OID for module $module));
 	for my $oid (sort keys %SNMP::MIB){
 		next if $oid !~ m/.1\./;
-		return $oid if $SNMP::MIB{$oid}{moduleID} eq $module; 
+		return $oid if $SNMP::MIB{$oid}{moduleID} eq $module and @{$SNMP::MIB{$oid}{children}} > 0; 
 	}
 	return undef;
 }
 
 sub main {
+	Log::Log4perl->init(\$logger_config);
+	$logger = get_logger();
 	get_options();
 	$SNMP::save_descriptions = 1;
-	SNMP::loadModules(@{$opt->{module}});
+	$SNMP::verbose = 0;
+	my $res = SNMP::loadModules(@{$opt->{module}});
+	$logger->fatal(qq(QQ $res QQ));
 	SNMP::initMib();
 
 	my @roots = ();
 
 	if (defined $opt->{root}){
+		$logger->debug(qq(Root OID is defined, using it: $opt->{root}));
 		push @roots, $opt->{root};
 	} else {
+		$logger->debug(qq(Root OID is not defined));
 		foreach my $module (@{$opt->{module}}){
 			my $oid = guess_root($module);
 			if (defined $oid){
+				$logger->info(qq(Guessed $oid as root OID for module $module));
 				push @roots, $oid;
 			} else {
+				$logger->warn(qq(Couldn't find root OID for module $module));
 				next;
 			}
 		}
@@ -466,7 +507,8 @@ sub main {
 	foreach my $root (@roots){
 		my $parent = $SNMP::MIB{$root};
 		if ($parent->{objectID} ne $root){
-			print_usage(qq(Parent OID $opt->{root} was not found! Maybe you forgot to load modules using --module=<module_name>?\n));
+			$logger->error(qq(Parent OID $opt->{root} was not found! Maybe you forgot to load modules using --module=<module_name>?));
+			exit 1;
 		}
 	
 		my $template = generate_template($parent);
